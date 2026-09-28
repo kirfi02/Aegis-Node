@@ -1,0 +1,62 @@
+#include <Arduino.h>
+
+const uint8_t PIN_RGB_R = 15;
+const uint8_t PIN_RGB_G = 2;
+const uint8_t PIN_RGB_B = 21;
+const bool RGB_COMMON_ANODE = false;
+
+void setRgbColor(bool red, bool green, bool blue) {
+    if (RGB_COMMON_ANODE) {
+        digitalWrite(PIN_RGB_R, red ? LOW : HIGH);
+        digitalWrite(PIN_RGB_G, green ? LOW : HIGH);
+        digitalWrite(PIN_RGB_B, blue ? LOW : HIGH);
+    } else {
+        digitalWrite(PIN_RGB_R, red ? HIGH : LOW);
+        digitalWrite(PIN_RGB_G, green ? HIGH : LOW);
+        digitalWrite(PIN_RGB_B, blue ? HIGH : LOW);
+    }
+}
+
+struct RgbTestState {
+    const char* label;
+    bool red;
+    bool green;
+    bool blue;
+};
+
+const RgbTestState RGB_TEST_STATES[] = {
+    {"ALL OFF", false, false, false},
+    {"RED ONLY", true, false, false},
+    {"GREEN ONLY", false, true, false},
+    {"BLUE ONLY", false, false, true},
+    {"RED + GREEN", true, true, false},
+    {"RED + BLUE", true, false, true},
+    {"GREEN + BLUE", false, true, true},
+    {"ALL ON", true, true, true}
+};
+
+const size_t RGB_TEST_STATE_COUNT = sizeof(RGB_TEST_STATES) / sizeof(RGB_TEST_STATES[0]);
+const unsigned long RGB_TEST_STATE_DURATION_MS = 3000;
+
+void setup() {
+    Serial.begin(115200);
+    delay(1000);
+
+    pinMode(PIN_RGB_R, OUTPUT);
+    pinMode(PIN_RGB_G, OUTPUT);
+    pinMode(PIN_RGB_B, OUTPUT);
+
+    setRgbColor(false, false, false);
+    Serial.println("\n[RGB_TEST] Standalone RGB LED hardware test active");
+    Serial.println("[RGB_TEST] Pins: R=15, G=2, B=21, common-cathode");
+}
+
+void loop() {
+    for (size_t index = 0; index < RGB_TEST_STATE_COUNT; index++) {
+        const RgbTestState& state = RGB_TEST_STATES[index];
+        Serial.print("[RGB_TEST] ");
+        Serial.println(state.label);
+        setRgbColor(state.red, state.green, state.blue);
+        delay(RGB_TEST_STATE_DURATION_MS);
+    }
+}
