@@ -7,6 +7,7 @@ byte KEYPAD_ROW_PINS[4] = {
     PIN_KP_R3,
     PIN_KP_R4
 };
+
 byte KEYPAD_COL_PINS[3] = {
     PIN_KP_C1,
     PIN_KP_C2,
@@ -23,14 +24,18 @@ char KEYS[4][3] = {
 
 AccessControlManager::AccessControlManager()
     : rfidReader(PIN_RFID_SS, PIN_RFID_RST),
-    keypad(makeKeymap(KEYS), KEYPAD_ROW_PINS, KEYPAD_COL_PINS, 4, 3),
+      keypad(makeKeymap(KEYS), KEYPAD_ROW_PINS, KEYPAD_COL_PINS, 4, 3),
       unlockedState(false),
       currentPinBuffer(""),
-      lastKeypressTime(0) {
+      lastKeypressTime(0),
+      authStage(AUTH_STAGE_IDLE),
+      validatedRfidId(""),
+      validatedRfidTelemetryId("") {
 
     for (int i = 0; i < 4; i++) {
         rowPins[i] = KEYPAD_ROW_PINS[i];
     }
+
     for (int i = 0; i < 3; i++) {
         colPins[i] = KEYPAD_COL_PINS[i];
     }
@@ -42,18 +47,22 @@ bool AccessControlManager::begin() {
     // Initialize SPI and RFID
     SPI.begin();
     rfidReader.PCD_Init();
-    
+
     // Initialize Servo
-    lockServo.setPeriodHertz(50); // Standard 50hz servo
+    lockServo.setPeriodHertz(50);
     lockServo.attach(PIN_SERVO_PWM, 500, 2400);
     lockServo.write(SERVO_LOCKED_ANGLE);
     unlockedState = false;
 
     currentPinBuffer = "";
     lastKeypressTime = 0;
+    authStage = AUTH_STAGE_IDLE;
+    validatedRfidId = "";
+    validatedRfidTelemetryId = "";
 
     // Test RFID communication
     byte v = rfidReader.PCD_ReadRegister(MFRC522::VersionReg);
+
     if (v == 0x00 || v == 0xFF) {
         Serial.println("[HW_FAULT] RC522 RFID reader not detected!");
         return false;
@@ -65,75 +74,210 @@ bool AccessControlManager::begin() {
 
 String AccessControlManager::getUidString(byte *buffer, byte bufferSize) {
     String uidStr = "UID-";
+
     for (byte i = 0; i < bufferSize; i++) {
-        if (buffer[i] < 0x10) uidStr += "0";
+        if (buffer[i] < 0x10) {
+            uidStr += "0";
+        }
+
         uidStr += String(buffer[i], HEX);
     }
+
     uidStr.toUpperCase();
     return uidStr;
 }
 
-bool AccessControlManager::pollCredentials(AuthAttempt &outAttempt) {
-    // 1. Check RFID Reader
-    if (rfidReader.PICC_IsNewCardPresent() && rfidReader.PICC_ReadCardSerial()) {
-        String rawUid = getUidString(rfidReader.uid.uidByte, rfidReader.uid.size);
-        Serial.printf("[RFID] Detected UID: %s\n", rawUid.c_str());
-        rfidReader.PICC_HaltA();
-        rfidReader.PCD_StopCrypto1();
-
-        // Check allowlist
-        bool valid = false;
-        for (size_t i = 0; i < AUTHORIZED_CREDENTIALS_COUNT; i++) {
-            if (String(AUTHORIZED_CREDENTIALS[i].credentialType) == "RFID" &&
-                rawUid == String(AUTHORIZED_CREDENTIALS[i].credentialId)) {
-                valid = true;
-                break;
-            }
+bool AccessControlManager::isAuthorizedCredential(
+    const String &credentialType,
+    const String &credentialId
+) {
+    for (size_t i = 0; i < AUTHORIZED_CREDENTIALS_COUNT; i++) {
+        if (String(AUTHORIZED_CREDENTIALS[i].credentialType) == credentialType &&
+            credentialId == String(AUTHORIZED_CREDENTIALS[i].credentialId)) {
+            return true;
         }
-
-        // Mask/Safe identifier for telemetry vs internal check
-        // Rule: Sensitive credentials must never be transmitted raw. We send masked/safe ID.
-        outAttempt = { rawUid, "PIN-REDACTED", "RFID", valid, millis() / 1000 };
-        return true;
     }
 
-    // 2. Check Keypad Matrix
-    char key = keypad.getKey();
-    if (key) {
-        unsigned long now = millis();
-        // Reset pin buffer if timeout exceeded
-        if (currentPinBuffer.length() > 0 && (now - lastKeypressTime > PIN_TIMEOUT_MS)) {
-            currentPinBuffer = "";
-        }
-        lastKeypressTime = now;
+    return false;
+}
 
-        if (key == '#') {
-            // Submit PIN buffer
-            if (currentPinBuffer.length() > 0) {
-                String pinId = "PIN-" + currentPinBuffer;
-                currentPinBuffer = "";
+bool AccessControlManager::pollCredentials(AuthAttempt &outAttempt) {
 
-                bool valid = false;
-                for (size_t i = 0; i < AUTHORIZED_CREDENTIALS_COUNT; i++) {
-                    if (String(AUTHORIZED_CREDENTIALS[i].credentialType) == "PIN" &&
-                        pinId == String(AUTHORIZED_CREDENTIALS[i].credentialId)) {
-                        valid = true;
-                        break;
-                    }
-                }
+    // ============================================================
+    // AUTH STAGE 1: RFID
+    // ============================================================
+    if (authStage == AUTH_STAGE_IDLE) {
 
-                // Rule: PIN is never transmitted. Telemetry receives "PIN-REDACTED".
-                outAttempt = { pinId, "PIN-REDACTED", "PIN", valid, millis() / 1000 };
+        if (rfidReader.PICC_IsNewCardPresent() &&
+            rfidReader.PICC_ReadCardSerial()) {
+
+            String rawUid = getUidString(
+                rfidReader.uid.uidByte,
+                rfidReader.uid.size
+            );
+
+            Serial.printf("[RFID] Detected UID: %s\n", rawUid.c_str());
+
+            rfidReader.PICC_HaltA();
+            rfidReader.PCD_StopCrypto1();
+
+            bool valid = isAuthorizedCredential("RFID", rawUid);
+
+            if (!valid) {
+                Serial.println("[MFA] RFID authentication failed.");
+
+                outAttempt = {
+                    rawUid,
+                    "RFID-REDACTED",
+                    "RFID",
+                    false,
+                    millis() / 1000
+                };
+
                 return true;
             }
-        } else if (key == '*') {
-            // Clear PIN buffer
+
+            // Valid RFID: do NOT unlock.
+            // Move to the second authentication factor.
+            validatedRfidId = rawUid;
+            validatedRfidTelemetryId = "RFID-REDACTED";
+            authStage = AUTH_STAGE_WAITING_FOR_PIN;
+
             currentPinBuffer = "";
-        } else {
-            // Append digit
+            lastKeypressTime = millis();
+
+            Serial.println("[MFA] RFID authentication successful.");
+            Serial.println("[MFA] Waiting for PIN...");
+
+            // RFID success alone is not an access grant.
+            // Return a non-granting authentication event so the
+            // system can record the successful first factor.
+            outAttempt = {
+                rawUid,
+                "RFID-REDACTED",
+                "RFID",
+                true,
+                millis() / 1000
+            };
+
+            return true;
+        }
+
+        // A PIN cannot authenticate while the system is waiting
+        // for the first factor.
+        char key = keypad.getKey();
+
+        if (key) {
+            Serial.println("[MFA] PIN ignored: valid RFID required first.");
+
+            if (key == '*') {
+                currentPinBuffer = "";
+            }
+
+            return false;
+        }
+
+        return false;
+    }
+
+    // ============================================================
+    // AUTH STAGE 2: PIN
+    // ============================================================
+    if (authStage == AUTH_STAGE_WAITING_FOR_PIN) {
+
+        unsigned long now = millis();
+
+        // Timeout waiting for PIN.
+        if (now - lastKeypressTime > PIN_TIMEOUT_MS) {
+
+            Serial.println("[MFA] PIN entry timeout. Authentication reset.");
+
+            currentPinBuffer = "";
+            validatedRfidId = "";
+            validatedRfidTelemetryId = "";
+            authStage = AUTH_STAGE_IDLE;
+
+            return false;
+        }
+
+        char key = keypad.getKey();
+
+        if (!key) {
+            return false;
+        }
+
+        lastKeypressTime = now;
+
+        if (key == '*') {
+            currentPinBuffer = "";
+
+            Serial.println("[MFA] PIN buffer cleared.");
+
+            return false;
+        }
+
+        if (key == '#') {
+
+            if (currentPinBuffer.length() == 0) {
+                return false;
+            }
+
+            String pinId = "PIN-" + currentPinBuffer;
+            currentPinBuffer = "";
+
+            bool valid = isAuthorizedCredential("PIN", pinId);
+
+            if (!valid) {
+
+                Serial.println("[MFA] PIN authentication failed.");
+
+                // Reset MFA sequence after failed second factor.
+                validatedRfidId = "";
+                validatedRfidTelemetryId = "";
+                authStage = AUTH_STAGE_IDLE;
+
+                // PIN is never transmitted.
+                outAttempt = {
+                    pinId,
+                    "PIN-REDACTED",
+                    "PIN",
+                    false,
+                    millis() / 1000
+                };
+
+                return true;
+            }
+
+            // Both factors are now valid.
+            Serial.println("[MFA] PIN authentication successful.");
+            Serial.println("[MFA] RFID + PIN authentication complete.");
+
+            // The final successful authentication event is represented
+            // as MFA so the main security state machine knows that
+            // both factors have been validated.
+            outAttempt = {
+                validatedRfidId + "|" + pinId,
+                "MFA-RFID+PIN",
+                "MFA",
+                true,
+                millis() / 1000
+            };
+
+            validatedRfidId = "";
+            validatedRfidTelemetryId = "";
+            authStage = AUTH_STAGE_IDLE;
+
+            return true;
+        }
+
+        // Accept numeric keypad input only.
+        if (key >= '0' && key <= '9') {
+
             if (currentPinBuffer.length() < 8) {
                 currentPinBuffer += key;
             }
+
+            return false;
         }
     }
 
@@ -142,6 +286,7 @@ bool AccessControlManager::pollCredentials(AuthAttempt &outAttempt) {
 
 void AccessControlManager::setLockState(bool unlocked) {
     unlockedState = unlocked;
+
     if (unlocked) {
         lockServo.write(SERVO_UNLOCKED_ANGLE);
     } else {

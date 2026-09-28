@@ -15,9 +15,14 @@ enum CredentialValidationResult {
     CREDENTIAL_INVALID
 };
 
+enum AuthenticationStage {
+    AUTH_STAGE_IDLE,
+    AUTH_STAGE_WAITING_FOR_PIN
+};
+
 struct AuthAttempt {
-    String internalCredentialId; // Used internally for threat engine logic
-    String telemetryCredentialId; // Safe masked ID for telemetry ("PIN-REDACTED" or masked RFID)
+    String internalCredentialId;      // Internal only; may contain sensitive credential data
+    String telemetryCredentialId;     // Safe identifier for telemetry
     String credentialType;
     bool isValid;
     unsigned long timestamp;
@@ -29,25 +34,39 @@ private:
     Keypad keypad;
     Servo lockServo;
     bool unlockedState;
-    
+
     char keypadKeys[4][3];
     byte rowPins[4];
     byte colPins[3];
-    
+
     String currentPinBuffer;
     unsigned long lastKeypressTime;
     const unsigned long PIN_TIMEOUT_MS = 5000;
 
+    // MFA state
+    AuthenticationStage authStage;
+    String validatedRfidId;
+    String validatedRfidTelemetryId;
+
     String getUidString(byte *buffer, byte bufferSize);
+
+    bool isAuthorizedCredential(
+        const String &credentialType,
+        const String &credentialId
+    );
 
 public:
     AccessControlManager();
-    
+
     bool begin();
-    
-    // Polls RFID reader and Keypad. Returns true if an auth attempt was completed.
+
+    // Polls RFID reader and keypad.
+    // Authentication flow:
+    // 1. Valid RFID
+    // 2. Valid PIN
+    // 3. Only then returns a valid MFA attempt
     bool pollCredentials(AuthAttempt &outAttempt);
-    
+
     void setLockState(bool unlocked);
     bool isUnlocked() const;
 };
