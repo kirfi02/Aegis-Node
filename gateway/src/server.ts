@@ -5,29 +5,49 @@ import dotenv from "dotenv"
 import { telemetrySchema } from "./schemas.js"
 import { telemetryStore } from "./telemetry.js"
 import { setupWebSocket, broadcastTelemetry } from "./websocket.js"
+import { getAlertEngine } from "./alerts/alert-engine.js"
 
 dotenv.config()
 
 const app = express()
 const server = http.createServer(app)
 
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 4000
-const HOST = process.env.HOST || "0.0.0.0"
-const DASHBOARD_ORIGIN = process.env.DASHBOARD_ORIGIN || "http://localhost:5173"
+const PORT = process.env.PORT
+  ? parseInt(process.env.PORT, 10)
+  : 4000
 
+const HOST = process.env.HOST || "0.0.0.0"
+
+const DASHBOARD_ORIGIN =
+  process.env.DASHBOARD_ORIGIN || "http://localhost:5173"
+
+// ------------------------------------------------------------
 // Middleware
+// ------------------------------------------------------------
+
 app.use(
   cors({
-    origin: [DASHBOARD_ORIGIN, "http://localhost:3000", "http://localhost:4173"],
+    origin: [
+      DASHBOARD_ORIGIN,
+      "http://localhost:3000",
+      "http://localhost:4173",
+    ],
     credentials: true,
   })
 )
+
 app.use(express.json())
 
-// Setup WebSocket server
+// ------------------------------------------------------------
+// WebSocket
+// ------------------------------------------------------------
+
 const wss = setupWebSocket(server)
 
-// Routes
+// ------------------------------------------------------------
+// Health
+// ------------------------------------------------------------
+
 app.get("/api/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
@@ -36,13 +56,22 @@ app.get("/api/health", (_req: Request, res: Response) => {
   })
 })
 
+// ------------------------------------------------------------
+// Current node status
+// ------------------------------------------------------------
+
 app.get("/api/status", (_req: Request, res: Response) => {
   const status = telemetryStore.getStatus()
+
   res.json({
     status: "success",
     data: status,
   })
 })
+
+// ------------------------------------------------------------
+// Telemetry ingestion
+// ------------------------------------------------------------
 
 app.post("/api/telemetry", (req: Request, res: Response) => {
   const result = telemetrySchema.safeParse(req.body)
@@ -53,18 +82,33 @@ app.post("/api/telemetry", (req: Request, res: Response) => {
       message: "Invalid telemetry payload",
       errors: result.error.format(),
     })
+
     return
   }
 
-  const telemetry = result.success ? result.data : req.body
+  const telemetry = result.data
 
-  console.log(`[AEGIS] Telemetry received: ${telemetry.event}`)
+  console.log(
+    `[AEGIS] Security event received: ` +
+    `${telemetry.event} from ${telemetry.deviceId}`
+  )
 
-  // Record in memory store
-  telemetryStore.recordTelemetry(telemetry)
+  // Store the validated event.
+  const status = telemetryStore.recordTelemetry(telemetry)
 
-  // Broadcast to WebSocket clients
-  broadcastTelemetry(wss, telemetry)
+  // Broadcast the stored event, which now includes:
+  // eventId, sequence and gateway receivedAt.
+  const storedEvent = status.recentEvents[0]
+
+  if (storedEvent) {
+    // Alert Engine: gateway notification subsystem only. It is NOT part of
+    // the ESP32 security authority. processEvent() is synchronous and its SMS
+    // dispatch is fire-and-forget, so neither this HTTP response nor the
+    // WebSocket broadcast waits on the SMS provider.
+    getAlertEngine().processEvent(storedEvent)
+
+    broadcastTelemetry(wss, storedEvent)
+  }
 
   res.status(200).json({
     status: "success",
@@ -72,8 +116,16 @@ app.post("/api/telemetry", (req: Request, res: Response) => {
   })
 })
 
+// ------------------------------------------------------------
 // Start server
+// ------------------------------------------------------------
+
 server.listen(PORT, HOST, () => {
-  console.log(`[AEGIS] Gateway started on ${HOST}:${PORT}`)
-  console.log(`[AEGIS] Allowed Dashboard Origin: ${DASHBOARD_ORIGIN}`)
+  console.log(
+    `[AEGIS] Gateway started on ${HOST}:${PORT}`
+  )
+
+  console.log(
+    `[AEGIS] Allowed Dashboard Origin: ${DASHBOARD_ORIGIN}`
+  )
 })
