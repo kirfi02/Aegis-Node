@@ -118,12 +118,19 @@ bool TelemetryManager::sendTelemetry(
     http.addHeader("Content-Type", "application/json");
 
     // Keep telemetry requests bounded so they cannot block physical security.
-    http.setTimeout(1500);
+    // The budget stays well below RETRY_INTERVAL_MS (10s) so a stalled request
+    // can never starve the security loop. 5000ms matches the Arduino
+    // HTTPCLIENT_DEFAULT_TCP_TIMEOUT; a tighter value (1500ms) caused
+    // spurious HTTPC_ERROR_READ_TIMEOUT on a healthy local SoftAP link.
+    http.setTimeout(5000);
 
     JsonDocument doc;
 
     doc["deviceId"] = DEVICE_ID;
-    doc["timestamp"] = millis() / 1000;
+    // The gateway contract (schemas.ts) requires "uptimeSeconds" as a
+    // non-negative integer. millis() is monotonic since boot, which is
+    // exactly the semantic the gateway documents for this field.
+    doc["uptimeSeconds"] = millis() / 1000;
     doc["event"] = eventType;
 
     if (credentialType && strlen(credentialType) > 0) {
@@ -175,9 +182,14 @@ bool TelemetryManager::sendTelemetry(
         );
         offlineLogged = false;
     } else {
+        // Log the numeric code as well as the string: HTTPClient's
+        // errorToString() returns an empty string for positive HTTP status
+        // codes, which previously made every 4xx/5xx rejection print blank.
+        // No credentials, PINs or secrets are ever included here.
         Serial.printf(
-            "[NET_ERR] Telemetry sync failed: %s\n",
-            http.errorToString(httpResponseCode).c_str()
+            "[NET_ERR] Telemetry sync failed: %s (code %d)\n",
+            http.errorToString(httpResponseCode).c_str(),
+            httpResponseCode
         );
     }
 

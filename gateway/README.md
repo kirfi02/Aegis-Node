@@ -87,7 +87,7 @@ Receives and validates ESP32 telemetry payloads via Zod, updates in-memory state
   ```json
   {
     "deviceId": "AEGIS-001",
-    "timestamp": 1726400000,
+    "uptimeSeconds": 1726400000,
     "event": "ACCESS_DENIED",
     "credentialType": "RFID",
     "credentialId": "UID-7F2A91",

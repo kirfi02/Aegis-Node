@@ -351,12 +351,14 @@ void loop() {
                     setRgbColor(false, false, true);
 
                     telemetry.sendTelemetry(
-                        "RFID_VALIDATED",
+                        "RFID_ACCEPTED",
                         "RFID",
                         activeAttempt.telemetryCredentialId.c_str(),
                         threatEngine.getThreatScore(),
                         threatEngine.getThreatLevel(),
-                        "WAITING_FOR_PIN"
+                        // Perimeter stays locked during the MFA challenge, so
+                        // the gateway lockState contract reports SECURED.
+                        "SECURED"
                     );
 
                     // Enter explicit MFA challenge state.
@@ -426,14 +428,17 @@ void loop() {
                     "[MFA] Authentication sequence reset."
                 );
 
-                telemetry.sendTelemetry(
-                    "MFA_TIMEOUT",
-                    "MFA",
-                    "MFA-REDACTED",
-                    threatEngine.getThreatScore(),
-                    threatEngine.getThreatLevel(),
-                    "SECURED"
-                );
+                // No telemetry is emitted for an MFA challenge timeout.
+                //
+                // The gateway EventType contract has no equivalent of
+                // "MFA_TIMEOUT". Mapping it to SYSTEM_ERROR would
+                // misclassify a normal authentication timeout as a node
+                // fault, and inventing a new event would require a gateway
+                // schema change. Sending nothing is strictly better than
+                // sending a wrongly classified security event.
+                //
+                // The local security response below is unchanged: the
+                // challenge is abandoned and the perimeter stays secured.
 
                 setRgbColor(false, false, false);
 
@@ -660,7 +665,7 @@ void loop() {
             audio.playLockdown();
 
             telemetry.sendTelemetry(
-                "LOCKDOWN",
+                "LOCKDOWN_ENTERED",
                 "SYSTEM",
                 DEVICE_ID,
                 threatEngine.getThreatScore(),
