@@ -202,11 +202,13 @@ bool AccessControlManager::pollCredentials(AuthAttempt &outAttempt) {
 
         char key = keypad.getKey();
 
-        if (!key) {
-            return false;
-        }
+if (!key) {
+    return false;
+}
 
-        lastKeypressTime = now;
+lastKeypressTime = now;
+
+Serial.printf("[KEYPAD] Key detected: %c\n", key);
 
         if (key == '*') {
             currentPinBuffer = "";

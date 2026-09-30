@@ -41,7 +41,7 @@ private:
 
     String currentPinBuffer;
     unsigned long lastKeypressTime;
-    const unsigned long PIN_TIMEOUT_MS = 5000;
+    const unsigned long PIN_TIMEOUT_MS = 15000;
 
     // MFA state
     AuthenticationStage authStage;

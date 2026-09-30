@@ -1,10 +1,14 @@
-import { NodeStatusState, TelemetryPayload } from "./types.js"
+import {
+  NodeStatusState,
+  StoredSecurityEvent,
+  TelemetryPayload,
+} from "./types.js"
 
 class TelemetryStore {
   private state: NodeStatusState = {
     deviceId: "ESP32-SEC-01",
     status: "OFFLINE",
-    lastSeen: 0,
+    lastSeen: null,
     threatScore: 0,
     threatLevel: "NORMAL",
     lockState: "SECURED",
@@ -13,29 +17,52 @@ class TelemetryStore {
   }
 
   private maxHistory = 100
+  private sequence = 0
 
   public getStatus(): NodeStatusState {
-    // If last seen was more than 30 seconds ago, mark offline for responsiveness if needed, 
-    // but here we keep the exact state recorded.
-    return { ...this.state }
+    return {
+      ...this.state,
+      recentEvents: [...this.state.recentEvents],
+    }
   }
 
   public recordTelemetry(payload: TelemetryPayload): NodeStatusState {
+    const receivedAt = new Date().toISOString()
+
+    this.sequence += 1
+
+    const event: StoredSecurityEvent = {
+      ...payload,
+      eventId: this.createEventId(),
+      receivedAt,
+      sequence: this.sequence,
+    }
+
     this.state.deviceId = payload.deviceId
     this.state.status = "ONLINE"
-    this.state.lastSeen = payload.timestamp * 1000 // convert unix timestamp seconds to ms if needed, or keep timestamp
+    this.state.lastSeen = receivedAt
     this.state.threatScore = payload.threatScore
     this.state.threatLevel = payload.threatLevel
     this.state.lockState = payload.lockState
     this.state.eventCount += 1
 
-    // Prepend to recent events
-    this.state.recentEvents.unshift(payload)
+    this.state.recentEvents.unshift(event)
+
     if (this.state.recentEvents.length > this.maxHistory) {
-      this.state.recentEvents = this.state.recentEvents.slice(0, this.maxHistory)
+      this.state.recentEvents = this.state.recentEvents.slice(
+        0,
+        this.maxHistory
+      )
     }
 
-    return { ...this.state }
+    return this.getStatus()
+  }
+
+  private createEventId(): string {
+    const timestamp = Date.now().toString(36)
+    const sequence = this.sequence.toString(36)
+
+    return `evt-${timestamp}-${sequence}`
   }
 }
 

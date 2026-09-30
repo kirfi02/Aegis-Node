@@ -49,7 +49,7 @@ bool rgbFlashState = false;
 // MFA challenge timeout.
 // This matches the PIN timeout currently implemented in
 // AccessControlManager.
-const unsigned long MFA_CHALLENGE_TIMEOUT_MS = 5000;
+const unsigned long MFA_CHALLENGE_TIMEOUT_MS = 15000;
 
 // ============================================================
 // RESET REASON

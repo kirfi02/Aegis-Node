@@ -1,16 +1,20 @@
 import { WebSocketServer, WebSocket } from "ws"
 import { Server } from "http"
 import { telemetryStore } from "./telemetry.js"
-import { TelemetryPayload } from "./types.js"
+import { StoredSecurityEvent } from "./types.js"
 
 export function setupWebSocket(server: Server): WebSocketServer {
-  const wss = new WebSocketServer({ server, path: "/ws" })
+  const wss = new WebSocketServer({
+    server,
+    path: "/ws",
+  })
 
   wss.on("connection", (ws: WebSocket) => {
     console.log("[AEGIS] WebSocket client connected")
 
-    // Send current state snapshot immediately upon connection
+    // Send the current gateway state immediately.
     const currentStatus = telemetryStore.getStatus()
+
     ws.send(
       JSON.stringify({
         type: "SNAPSHOT",
@@ -30,13 +34,17 @@ export function setupWebSocket(server: Server): WebSocketServer {
   return wss
 }
 
-export function broadcastTelemetry(wss: WebSocketServer, payload: TelemetryPayload) {
+export function broadcastTelemetry(
+  wss: WebSocketServer,
+  payload: StoredSecurityEvent
+): void {
   const message = JSON.stringify({
     type: "TELEMETRY",
     data: payload,
   })
 
   let clientCount = 0
+
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(message)
@@ -44,5 +52,8 @@ export function broadcastTelemetry(wss: WebSocketServer, payload: TelemetryPaylo
     }
   })
 
-  console.log(`[AEGIS] Telemetry broadcast: ${payload.deviceId} (${clientCount} clients)`)
+  console.log(
+    `[AEGIS] Security event broadcast: ${payload.event} ` +
+    `(${clientCount} clients)`
+  )
 }
